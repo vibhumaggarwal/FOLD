@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FOLD | Fractal Steganography</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="fractal-bg"></div>
+    
+    <div class="toast-container" id="toast-container"></div>
+
+    <div class="app-container">
+        <header class="app-header">
+            <h1 class="logo">FOLD<span class="blinking-cursor">_</span></h1>
+            <p class="subtitle">Fractal Optimized Layered Data</p>
+        </header>
+
+        <div class="tabs">
+            <button class="tab-button active" data-target="encoder-panel">ENCODE</button>
+            <button class="tab-button" data-target="decoder-panel">DECODE</button>
+        </div>
+
+        <main class="panels">
+            <!-- ENCODER PANEL -->
+            <section id="encoder-panel" class="panel active">
+                <div class="drop-zone" id="encode-drop">
+                    <input type="file" id="encode-input" hidden>
+                    <div class="drop-content">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                        <p>Drag & Drop any file here</p>
+                        <span class="muted">or click to browse</span>
+                    </div>
+                </div>
+
+                <div class="file-info hidden" id="encode-file-info">
+                    <div class="file-details">
+                        <span class="badge">TARGET</span>
+                        <div class="details-text">
+                            <strong id="encode-filename">filename.txt</strong>
+                            <span id="encode-filesize">0 B</span>
+                        </div>
+                    </div>
+                    <button class="icon-btn remove-btn" id="encode-remove" title="Remove File">✕</button>
+                </div>
+
+                <div class="action-area">
+                    <button class="action-btn" id="encode-btn" disabled>
+                        <span class="btn-text">INITIALIZE ENCODING</span>
+                        <div class="btn-loader hidden"></div>
+                    </button>
+                </div>
+
+                <div class="preview-area hidden" id="encode-preview-area">
+                    <h3 class="preview-title">DATA STREAM PREVIEW</h3>
+                    <div class="canvas-wrapper">
+                        <!-- Used to draw the frames visually -->
+                        <canvas id="encode-canvas" width="512" height="512"></canvas>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="encode-progress"></div>
+                    </div>
+                    <p class="status-text" id="encode-status">Processing sequence...</p>
+                </div>
+            </section>
+
+            <!-- DECODER PANEL -->
+            <section id="decoder-panel" class="panel">
+                <div class="drop-zone" id="decode-drop">
+                    <input type="file" id="decode-input" accept="video/webm,video/mp4,video/avi" hidden>
+                    <div class="drop-content">
+                        <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
+                        <p>Drag & Drop FOLD encoded video</p>
+                        <span class="muted">or click to browse</span>
+                    </div>
+                </div>
+
+                <div class="file-info hidden" id="decode-file-info">
+                    <div class="file-details">
+                        <span class="badge">VIDEO</span>
+                        <div class="details-text">
+                            <strong id="decode-filename">encoded.webm</strong>
+                            <span id="decode-filesize">0 B</span>
+                        </div>
+                    </div>
+                    <button class="icon-btn remove-btn" id="decode-remove" title="Remove File">✕</button>
+                </div>
+
+                <div class="action-area">
+                    <button class="action-btn" id="decode-btn" disabled>
+                        <span class="btn-text">EXTRACT DATA</span>
+                        <div class="btn-loader hidden"></div>
+                    </button>
+                </div>
+
+                <div class="preview-area hidden" id="decode-preview-area">
+                    <h3 class="preview-title">FRAME ANALYSIS</h3>
+                    <div class="canvas-wrapper">
+                        <!-- Used to preview the video being decoded -->
+                        <canvas id="decode-canvas" width="512" height="512"></canvas>
+                        <!-- Hidden video element -->
+                        <video id="decode-video" muted playsinline style="display:none;"></video>
+                    </div>
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" id="decode-progress"></div>
+                    </div>
+                    <p class="status-text" id="decode-status">Scanning frames...</p>
+                </div>
+            </section>
+        </main>
+
+        <section class="how-it-works">
+            <details>
+                <summary>How FOLD works</summary>
+                <div class="details-content">
+                    <p><strong>FOLD</strong> performs pure, lossless client-side steganography. It reads the raw bytes of your file, appends an integrity header (CRC32), and converts every bit into black & white pixels.</p>
+                    <p>These pixels are arranged into 128x128 grid frames using 4x4 blocks to survive video compression. The frames are immediately captured via <code>MediaRecorder</code> and exported as a WebM video.</p>
+                    <p>When decoding, FOLD reads each frame using <code>requestVideoFrameCallback</code>, extracts the embedded sequence indices to avoid duplicate frames, validates the checksum, and triggers a download of the original intact file.</p>
+                </div>
+            </details>
+        </section>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
