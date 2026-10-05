@@ -5,23 +5,22 @@ with open("requirements.txt", "r") as f:
 
 setup(
     name="fold",
-    version="1.0.0",
-    description="Fractal Optimized Layered Data - Convert anything to video and back",
+    version="2.0.0",
+    description="Fractal Optimized Layered Data - store any file inside a video and get it back",
     author="FOLD Team",
     packages=find_packages(),
-    install_requires=requirements,
+    install_requires=[r for r in requirements if r and not r.startswith(("fastapi", "uvicorn", "python-multipart"))],
+    extras_require={"api": ["fastapi>=0.100.0", "uvicorn>=0.20.0", "python-multipart>=0.0.6"], "test": ["pytest"]},
     entry_points={
         "console_scripts": [
             "fold=fold.cli.main:main",
         ],
     },
-    python_requires=">=3.8",
+    python_requires=">=3.9",
     classifiers=[
-        "Development Status :: 5 - Production/Stable",
+        "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
