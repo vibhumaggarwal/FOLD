@@ -346,63 +346,86 @@ decodeBtn.addEventListener('click', async () => {
 
     statusText.textContent = 'Scanning frames...';
     
-    let expectedFrameIndex = 0;
-    let completePayloadBits = [];
+    // Every copy of a frame votes on each bit (frames are recorded several times),
+    // and frames are keyed by their embedded index so dropped or repeated frames are harmless.
+    const votes = new Map();   // frameIdx -> Float32Array of summed block brightness
+    const counts = new Map();  // frameIdx -> number of copies seen
+    let finished = false;
+
+    const readHeader = (levels) => {
+        let frameIdx = 0, payloadLen = 0;
+        for (let i = 0; i < FRAME_INDEX_BITS; i++) frameIdx = frameIdx * 2 + (levels[i] > 127 ? 1 : 0);
+        for (let i = FRAME_INDEX_BITS; i < HEADER_BITS; i++) payloadLen = payloadLen * 2 + (levels[i] > 127 ? 1 : 0);
+        return { frameIdx, payloadLen };
+    };
     
     const processFrame = (now, metadata) => {
+        if (finished) return;
         // Draw current video frame to canvas to read pixels
         ctx.drawImage(video, 0, 0, CANVAS_SIZE, CANVAS_SIZE);
         const imgData = ctx.getImageData(0, 0, CANVAS_SIZE, CANVAS_SIZE).data;
         
-        const frameBits = new Uint8Array(BITS_PER_FRAME);
+        // Average brightness of each whole 4x4 block, which is far more robust
+        // to compression than sampling a single pixel
+        const levels = new Float32Array(BITS_PER_FRAME);
         let fbIndex = 0;
-        
-        // Read 128x128 grid
         for (let y = 0; y < GRID_SIZE; y++) {
             for (let x = 0; x < GRID_SIZE; x++) {
-                // Sample the center of the 4x4 block to avoid edges where compression artifacts live
-                const cy = y * BLOCK_SIZE + (BLOCK_SIZE / 2);
-                const cx = x * BLOCK_SIZE + (BLOCK_SIZE / 2);
-                const pxIdx = (cy * CANVAS_SIZE + cx) * 4;
-                
-                // R channel threshold > 128
-                frameBits[fbIndex++] = imgData[pxIdx] > 128 ? 1 : 0;
+                let sum = 0;
+                for (let by = 0; by < BLOCK_SIZE; by++) {
+                    let pxIdx = ((y * BLOCK_SIZE + by) * CANVAS_SIZE + x * BLOCK_SIZE) * 4;
+                    for (let bx = 0; bx < BLOCK_SIZE; bx++, pxIdx += 4) {
+                        sum += imgData[pxIdx] + imgData[pxIdx + 1] + imgData[pxIdx + 2];
+                    }
+                }
+                levels[fbIndex++] = sum / (BLOCK_SIZE * BLOCK_SIZE * 3);
             }
         }
         
-        // Parse Frame Index (32 bits)
-        let frameIdx = 0;
-        for (let i = 0; i < 32; i++) {
-            frameIdx = (frameIdx * 2) + frameBits[i];
-        }
-        
-        // Parse Payload Length (16 bits)
-        let payloadLen = 0;
-        for (let i = 32; i < 48; i++) {
-            payloadLen = (payloadLen * 2) + frameBits[i];
-        }
-        
-        if (frameIdx === expectedFrameIndex) {
-            // New valid frame
-            for (let i = 0; i < payloadLen; i++) {
-                completePayloadBits.push(frameBits[48 + i]);
+        const { frameIdx, payloadLen } = readHeader(levels);
+        // Ignore frames whose header is clearly damaged
+        if (payloadLen <= MAX_PAYLOAD_BITS && frameIdx < 10000000) {
+            if (votes.has(frameIdx)) {
+                const acc = votes.get(frameIdx);
+                for (let i = 0; i < BITS_PER_FRAME; i++) acc[i] += levels[i];
+                counts.set(frameIdx, counts.get(frameIdx) + 1);
+            } else {
+                votes.set(frameIdx, levels);
+                counts.set(frameIdx, 1);
             }
-            expectedFrameIndex++;
-            progressBar.style.width = `${Math.min(100, (video.currentTime / video.duration) * 100)}%`;
         }
+        progressBar.style.width = `${Math.min(100, (video.currentTime / video.duration) * 100)}%`;
+        statusText.textContent = `Scanning frames... ${votes.size} found`;
         
-        if (!video.ended && video.currentTime < video.duration) {
-            video.requestVideoFrameCallback(processFrame);
-        } else {
-            finalizeDecoding();
+        if (!video.ended) video.requestVideoFrameCallback(processFrame);
+    };
+
+    const assembleBits = () => {
+        if (votes.size === 0) throw new Error("No FOLD frames found in this video.");
+        const last = Math.max(...votes.keys());
+        const missing = [];
+        for (let i = 0; i <= last; i++) if (!votes.has(i)) missing.push(i);
+        if (missing.length) {
+            throw new Error(`${missing.length} frame(s) missing (index ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '…' : ''}). Try decoding again with this tab in the foreground.`);
         }
+        const bits = [];
+        for (let i = 0; i <= last; i++) {
+            const acc = votes.get(i), n = counts.get(i);
+            const levels = acc.map(v => v / n);
+            const { payloadLen } = readHeader(levels);
+            for (let j = 0; j < payloadLen; j++) bits.push(levels[HEADER_BITS + j] > 127 ? 1 : 0);
+        }
+        return bits;
     };
     
     const finalizeDecoding = () => {
+        if (finished) return;
+        finished = true;
         statusText.textContent = 'Reconstructing byte arrays...';
         URL.revokeObjectURL(objectUrl);
         
         try {
+            const completePayloadBits = assembleBits();
             // Group bits into bytes
             const totalBytes = Math.floor(completePayloadBits.length / 8);
             const fullBytes = new Uint8Array(totalBytes);
@@ -421,7 +444,7 @@ decodeBtn.addEventListener('click', async () => {
             
             // Check MAGIC FOLD
             if (fullBytes[0] !== 70 || fullBytes[1] !== 79 || fullBytes[2] !== 76 || fullBytes[3] !== 68) {
-                throw new Error("Invalid FOLD signature found. Video might be corrupted or not a FOLD encode.");
+                throw new Error("Invalid FOLD signature found. Lossless .avi/.mkv videos can only be decoded with the Python tool; the browser reads robust .webm/.mp4 videos.");
             }
             
             const nameLen = fullBytes[4];
@@ -433,6 +456,9 @@ decodeBtn.addEventListener('click', async () => {
             const crcExpected = view.getUint32(9 + nameLen, false);
             
             const headerEnd = 13 + nameLen;
+            if (fullBytes.length < headerEnd + fileLen) {
+                throw new Error("Video ended before all data was recovered.");
+            }
             const fileData = fullBytes.slice(headerEnd, headerEnd + fileLen);
             
             // Verify Integrity
@@ -465,7 +491,21 @@ decodeBtn.addEventListener('click', async () => {
         }
     };
     
+    // The last frame's callback can fire before 'ended', so finish on 'ended' too
+    video.onended = () => setTimeout(finalizeDecoding, 50);
+    video.onerror = () => {
+        showToast('This browser cannot play that video file.', 'error');
+        finished = true;
+        decodeBtn.disabled = false;
+        decodeBtn.querySelector('.btn-loader').classList.add('hidden');
+        decodeBtn.querySelector('.btn-text').textContent = 'EXTRACT DATA';
+    };
+
     // Start video playback silently
-    video.play();
+    video.currentTime = 0;
     video.requestVideoFrameCallback(processFrame);
+    video.play().catch(err => {
+        video.onerror();
+        console.error(err);
+    });
 });

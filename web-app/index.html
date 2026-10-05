@@ -69,7 +69,7 @@
             <!-- DECODER PANEL -->
             <section id="decoder-panel" class="panel">
                 <div class="drop-zone" id="decode-drop">
-                    <input type="file" id="decode-input" accept="video/webm,video/mp4,video/avi" hidden>
+                    <input type="file" id="decode-input" accept="video/webm,video/mp4" hidden>
                     <div class="drop-content">
                         <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
                         <p>Drag & Drop FOLD encoded video</p>
@@ -118,6 +118,7 @@
                     <p><strong>FOLD</strong> performs pure, lossless client-side steganography. It reads the raw bytes of your file, appends an integrity header (CRC32), and converts every bit into black & white pixels.</p>
                     <p>These pixels are arranged into 128x128 grid frames using 4x4 blocks to survive video compression. The frames are immediately captured via <code>MediaRecorder</code> and exported as a WebM video.</p>
                     <p>When decoding, FOLD reads each frame using <code>requestVideoFrameCallback</code>, extracts the embedded sequence indices to avoid duplicate frames, validates the checksum, and triggers a download of the original intact file.</p>
+                    <p>This is the same format as the Python tool's robust mode (<code>fold encode file --robust</code>), so videos made here decode with <code>fold decode</code> and vice versa. The Python tool's default lossless .avi videos can't be played by browsers and must be decoded with Python.</p>
                 </div>
             </details>
         </section>
