@@ -2,125 +2,135 @@
 Core encoder for FOLD - converts data to video
 """
 
-import cv2
-import numpy as np
-from typing import Union, Optional
 import os
 import time
-from tqdm import tqdm
+from typing import Optional, Union
 
-from .fractal import FractalEncoder, _default_encoder
+import cv2
+
+from . import container, frames
 from ..utils.validation import validate_input_data, validate_output_path
 from ..utils.logging import setup_logger, log_performance
-from ..exceptions import EncodingError
+from ..exceptions import EncodingError, ValidationError
 
 logger = setup_logger("fold.encoder")
 
-def store(data: Union[str, bytes, bytearray], 
+MODES = ("lossless", "robust")
+
+# Extension -> codecs to try, in order. Lossless codecs keep every byte intact.
+LOSSLESS_CODECS = {".avi": ["png "], ".mkv": ["FFV1"]}
+LOSSY_CODECS = {".mp4": ["avc1", "mp4v"], ".webm": ["VP90", "VP80"]}
+
+
+def store(data: Union[str, bytes, bytearray, os.PathLike],
           output_path: Optional[str] = None,
+          mode: str = "lossless",
+          name: Optional[str] = None,
           fps: int = 30,
           width: int = 1920,
-          height: int = 1080) -> str:
+          height: int = 1080,
+          block: int = 4,
+          repeat: int = 3) -> str:
     """
-    Convert data to video file using fractal encoding
-    
+    Convert data to a video file.
+
     Args:
-        data: Input data (string, bytes, or bytearray)
-        output_path: Output video file path (optional)
-        fps: Frames per second
-        width: Video width
-        height: Video height
-        
+        data: bytes/bytearray, a str of text, or a path to a file (os.PathLike
+              or a str naming an existing file)
+        output_path: where to write the video. Defaults to fold_<hash>.avi
+                     (lossless) or .mp4 (robust) in the current directory.
+        mode: "lossless" packs 3 bytes per pixel and needs .avi or .mkv.
+              "robust" draws 4x4 black/white blocks that survive MP4/WebM
+              compression and can be decoded by the browser web-app.
+        name: filename stored inside the video (defaults to the input file's name)
+        fps: frames per second
+        width, height: frame size for lossless mode
+        block: block size in pixels for robust mode (frame is 128*block square)
+        repeat: how many times each robust frame is written
+
     Returns:
-        str: Path to created video file
-        
-    Raises:
-        EncodingError: If encoding fails
+        Path to the created video file
     """
     start_time = time.time()
+    if mode not in MODES:
+        raise ValidationError(f"mode must be one of {MODES}, got {mode!r}")
+
     try:
-        # Validate and prepare input
-        logger.info("Starting encoding process...")
-        byte_data = validate_input_data(data)
-        logger.info(f"Input data size: {len(byte_data)} bytes")
-        
-        # Generate output path if not provided
+        byte_data, inferred_name = _read_input(data)
+        name = name if name is not None else inferred_name
+        logger.info(f"Encoding {len(byte_data)} bytes in {mode} mode")
+
         if output_path is None:
-            output_path = _generate_output_path(byte_data)
-        
+            output_path = _generate_output_path(byte_data, mode)
         output_path = validate_output_path(output_path)
-        
-        # Create fractal encoder
-        encoder = FractalEncoder(width, height)
-        
-        # Encode data to frames
-        logger.info("Encoding data to fractal frames...")
-        frames = list(encoder.encode_data_to_pixels(byte_data))
-        logger.info(f"Generated {len(frames)} frames")
-        
-        # Write video file
-        logger.info(f"Writing video to {output_path}")
-        _write_video(frames, output_path, fps, width, height)
-        
-        # Log performance
-        exec_time = time.time() - start_time
-        log_performance(logger, "Encoding", exec_time, len(byte_data))
-        logger.info(f"Video saved to: {output_path}")
-        
-        return output_path
-        
-    except Exception as e:
-        logger.error(f"Encoding failed: {str(e)}")
-        raise EncodingError(f"Failed to encode data: {str(e)}") from e
+        ext = os.path.splitext(output_path)[1].lower()
 
-def _generate_output_path(data: bytes) -> str:
-    """Generate default output path based on data"""
-    import hashlib
-    import time
-    
-    # Create hash of data for unique filename
-    data_hash = hashlib.md5(data).hexdigest()[:8]
-    timestamp = int(time.time())
-    
-    filename = f"fold_{data_hash}_{timestamp}.mp4"
-    return os.path.join(os.getcwd(), filename)
-
-def _write_video(frames: list, output_path: str, fps: int, width: int, height: int):
-    """Write frames to video file using lossless codec"""
-    try:
-        # Use AVI container with uncompressed codec for lossless
-        # OpenCV works best with AVI for raw/lossless video
-        avi_path = output_path.replace('.mp4', '.avi') if output_path.endswith('.mp4') else output_path
-        if not avi_path.endswith('.avi'):
-            avi_path = avi_path + '.avi'
-        
-        # Use uncompressed RGBA codec - truly lossless
-        fourcc = cv2.VideoWriter_fourcc(*'RGBA')
-        video_writer = cv2.VideoWriter(avi_path, fourcc, fps, (width, height))
-        
-        if not video_writer.isOpened():
-            raise EncodingError("Failed to initialize video writer")
-        
-        # Write frames with progress bar
-        for frame in tqdm(frames, desc="Writing frames", unit="frame"):
-            # Convert RGB to BGR for OpenCV
-            frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-            video_writer.write(frame_bgr)
-        
-        video_writer.release()
-        
-        # Verify file was created
-        if not os.path.exists(avi_path):
-            raise EncodingError("Video file was not created")
-        
-        # Rename to .mp4 if requested
-        if output_path.endswith('.mp4') and avi_path != output_path:
-            import shutil
-            shutil.move(avi_path, output_path)
+        if mode == "lossless":
+            if ext not in LOSSLESS_CODECS:
+                raise ValidationError(
+                    f"Lossless mode needs a lossless container (.avi or .mkv), got {ext or 'no extension'}. "
+                    "Use mode='robust' for .mp4/.webm."
+                )
+            buf = container.pack(byte_data, name, container.DENSE_MAGIC)
+            frame_iter = frames.dense_encode(buf, width, height)
+            size = (width, height)
+            codecs = LOSSLESS_CODECS[ext]
         else:
-            output_path = avi_path
-        
-        logger.info(f"Video file size: {os.path.getsize(output_path)} bytes")
-        
+            if ext not in {**LOSSLESS_CODECS, **LOSSY_CODECS}:
+                raise ValidationError(f"Unsupported video extension {ext!r}; use .mp4, .webm, .avi or .mkv")
+            buf = container.pack(byte_data, name, container.ROBUST_MAGIC)
+            frame_iter = frames.robust_encode(buf, block=block, repeat=repeat)
+            side = frames.GRID * block
+            size = (side, side)
+            codecs = LOSSLESS_CODECS.get(ext) or LOSSY_CODECS[ext]
+
+        count = _write_video(frame_iter, output_path, fps, size, codecs)
+        logger.info(f"Wrote {count} frames, {os.path.getsize(output_path)} bytes -> {output_path}")
+        log_performance(logger, "Encoding", time.time() - start_time, len(byte_data))
+        return output_path
+
+    except (EncodingError, ValidationError):
+        raise
     except Exception as e:
-        raise EncodingError(f"Failed to write video: {str(e)}") from e
+        logger.error(f"Encoding failed: {e}")
+        raise EncodingError(f"Failed to encode data: {e}") from e
+
+
+def _read_input(data):
+    """Returns (bytes, filename-or-None)."""
+    if isinstance(data, os.PathLike) or (isinstance(data, str) and os.path.isfile(data)):
+        path = os.fspath(data)
+        with open(path, "rb") as f:
+            return f.read(), os.path.basename(path)
+    return validate_input_data(data), None
+
+
+def _generate_output_path(data: bytes, mode: str) -> str:
+    import hashlib
+    data_hash = hashlib.md5(data).hexdigest()[:8]
+    ext = ".avi" if mode == "lossless" else ".mp4"
+    return os.path.join(os.getcwd(), f"fold_{data_hash}_{int(time.time())}{ext}")
+
+
+def _write_video(frame_iter, output_path: str, fps: int, size, codecs) -> int:
+    writer = None
+    for codec in codecs:
+        writer = cv2.VideoWriter(output_path, cv2.VideoWriter_fourcc(*codec), fps, size)
+        if writer.isOpened():
+            break
+        writer.release()
+        writer = None
+    if writer is None:
+        raise EncodingError(f"No working video codec for {output_path} (tried {', '.join(codecs)})")
+
+    count = 0
+    try:
+        for frame in frame_iter:
+            writer.write(frame)
+            count += 1
+    finally:
+        writer.release()
+
+    if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        raise EncodingError("Video file was not created")
+    return count

@@ -1,13 +1,12 @@
 """
 FOLD - Fractal Optimized Layered Data
 
-A production-grade library for converting arbitrary data to video files and back.
+Store any file inside a video and get it back byte-for-byte.
 """
 
-__version__ = "1.0.0"
-__author__ = "FOLD Team"
+__version__ = "2.0.0"
 
 from .core.encoder import store
-from .core.decoder import retrieve
+from .core.decoder import retrieve, retrieve_file
 
-__all__ = ["store", "retrieve"]
+__all__ = ["store", "retrieve", "retrieve_file"]
