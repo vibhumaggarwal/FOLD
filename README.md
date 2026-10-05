@@ -1,182 +1,113 @@
 # FOLD - Fractal Optimized Layered Data
 
-FOLD is a data-to-video encoding system that converts arbitrary files (JSON, code, text, images, binary data) into video files using fractal pixel encoding, enabling lossless data retrieval from the resulting video.
+FOLD stores any file inside a video and gets it back byte-for-byte. Every video carries the original filename and a CRC32 checksum, so a decode either returns exactly what went in or tells you the video is damaged.
 
-## Use Case
+There are two ways to encode:
 
-**Problem:** Data needs to be stored or transmitted in a format that appears as ordinary video media.
+| Mode | Container | Survives re-compression? | Size for a 3 MB file | Decode in browser? |
+|---|---|---|---|---|
+| **lossless** (default) | `.avi` (PNG codec) or `.mkv` (FFV1) | No, needs the exact file | ~3 MB | No |
+| **robust** | `.mp4` (H.264) or `.webm` | Yes: tested after re-encoding at CRF 40 and after shrinking to half size | ~10 MB | Yes |
 
-**Solution:** FOLD encodes any data type into video frames using fractal pixel patterns, preserving the original data bit-for-bit. The encoded video plays as normal video while containing hidden data that can be extracted losslessly.
+Use **lossless** for archiving and moving files around as-is. Use **robust** when the video will pass through something that re-encodes it (a video host, a messaging app).
 
-**Applications:**
-- Steganography and covert data transmission
-- Data archival in video format
-- Bypass media-only data transfer restrictions
-- Unique data packaging for creative/technical projects
-
-## What It Does
-
-FOLD provides two core functions:
-
-1. **Encode (`store`)**: Convert any file or byte data into a video file
-2. **Decode (`retrieve`)**: Extract the original data from the video file
-
-The system automatically:
-- Generates fractal-encoded pixel patterns from input data
-- Embeds CRC32 checksums for integrity verification
-- Supports any file type (JSON, code, images, text, binary)
-
-## How It Works
-
-### Encoding Process
-
-```
-Input Data → Bit String → Fractal Frames → Video File
-              (with header)   (RGB pixels)    (.avi/.mp4)
-```
-
-1. **Data Preparation**: Input is converted to bytes with header (magic + length + checksum)
-2. **Bit Encoding**: Each bit becomes RGB pixel values (threshold at 128)
-3. **Frame Generation**: Pixels are arranged into video frames
-4. **Video Output**: Frames written as uncompressed AVI video
-
-### Decoding Process
-
-```
-Video File → Frames → Pixel Values → Bit String → Original Data
-                          (threshold)    (with header)   (verified)
-```
-
-1. **Frame Reading**: Video frames are read as RGB arrays
-2. **Bit Recovery**: Pixel values converted back to bits using threshold
-3. **Data Parsing**: Header extracted, checksum verified, data returned
-
-## Quick Start
-
-### Installation
+## Install
 
 ```bash
 pip install -r requirements.txt
+# or, as a package with the `fold` command:
+pip install -e ".[api]"
 ```
 
-### Basic Usage
-
-```python
-from fold import store, retrieve
-
-# Encode a file to video
-video_path = store("data.json", "output.avi")
-
-# Decode video back to original data
-original_data = retrieve("output.avi")
-```
-
-### SDK Usage
-
-```python
-from fold_sdk import FoldMemory
-
-# Initialize memory storage
-memory = FoldMemory("./storage")
-
-# Add file (encodes to video)
-mp4_path = memory.add_file("config.json")
-
-# Search for files
-results = memory.search("config")
-
-# Decode video to original data
-data = memory.decode(mp4_path)
-```
-
-### API Server
+## Command line
 
 ```bash
-# Start the REST API
-python -m fold.api.server
-
-# Or run with uvicorn
-uvicorn fold.api.server:app --host 0.0.0.0 --port 8000
+fold encode report.pdf                 # -> report.pdf.avi
+fold encode report.pdf --robust        # -> report.pdf.mp4
+fold decode report.pdf.mp4             # -> report.pdf (original name restored)
+fold info report.pdf.mp4               # show the stored filename and size
 ```
 
-## API Endpoints
+Without installing, use `python -m fold.cli.main` in place of `fold`.
+
+## Python
+
+```python
+from fold import store, retrieve, retrieve_file
+
+store("report.pdf", "report.avi")                    # a path is read as a file
+store(b"raw bytes", "data.avi")                      # bytes or text work too
+store("report.pdf", "report.mp4", mode="robust")
+
+data = retrieve("report.avi")                        # -> bytes
+name, data = retrieve_file("report.mp4")             # -> ("report.pdf", bytes)
+```
+
+`retrieve` detects the format automatically, including videos made by FOLD 1.0.
+
+## Web app
+
+`web-app/` is a self-contained page that encodes and decodes in the browser with no server. It writes robust-format WebM videos, so its output decodes with `fold decode`, and robust `.mp4` files from Python decode in the page.
+
+```bash
+python -m fold.api.server     # serves the web app at http://localhost:8000
+```
+
+Opening `web-app/index.html` directly also works.
+
+## REST API
+
+The same server exposes:
 
 | Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/` | Service status |
-| GET | `/files` | List all stored files |
-| POST | `/encode` | Upload and encode file |
-| POST | `/search` | Search stored files |
-| GET | `/decode/{filename}` | Decode and retrieve file |
-| POST | `/batch_encode` | Encode multiple files |
-| DELETE | `/files/{filename}` | Delete stored file |
+|---|---|---|
+| GET | `/health` | Service status |
+| POST | `/encode?mode=lossless\|robust` | Upload a file (`file` form field), get a video back |
+| POST | `/decode` | Upload a FOLD video, get the original file back with its name |
 
-## Product Requirements Document (PRD)
+Uploads are capped at 100 MB (set `FOLD_MAX_UPLOAD_MB` to change). Temporary files are deleted after each request.
 
-### Core Features
+## How it works
 
-#### F1: Data Encoding
-- **Requirement**: Encode any file type to video format
-- **Input**: File path or byte data
-- **Output**: AVI video file
-- **Validation**: CRC32 checksum embedded in output
+Every payload gets a header before it's drawn into frames:
 
-#### F2: Data Decoding
-- **Requirement**: Decode video back to original data losslessly
-- **Input**: Video file path
-- **Output**: Original byte data
-- **Validation**: CRC32 verification before returning
+```
+lossless:  "FLD2" | name length (1 byte) | name | data length (8 bytes) | CRC32 | data
+robust:    "FOLD" | name length (1 byte) | name | data length (4 bytes) | CRC32 | data
+```
 
-#### F3: Format Support
-- **Requirement**: Support JSON, text, code, images, binary
-- **Detection**: Automatic file type detection via content analysis
+**Lossless mode** writes the bytes straight into pixel colour channels: 3 bytes per pixel, 6.2 MB per 1920×1080 frame. A lossless codec keeps every value exact.
 
-#### F4: Metadata Management (AI Memory System)
-- **Requirement**: Extract, inject, and search metadata
-- **Features**: Keywords, summary, file type, hash, timestamps
+**Robust mode** draws one bit per 4×4 black or white block on a 128×128 grid (512×512 px frames). Each frame starts with a 32-bit frame index and a 16-bit payload length, and each frame is written 3 times. When decoding:
 
-#### F5: Search Indexing
-- **Requirement**: In-memory index of all stored videos
-- **Capabilities**: Keyword search, exact/partial matching
+- each block's brightness is averaged, so blurry compression edges don't matter;
+- frames are resized to the grid first, so a downscaled re-upload still decodes;
+- repeated copies of a frame vote on every bit;
+- dropped or duplicated frames are handled by the frame index, and missing frames are reported by number.
 
-#### F6: REST API
-- **Requirement**: HTTP interface for remote operations
-- **Authentication**: None (internal use)
+**FOLD 1.0 videos** (1 bit per colour channel, uncompressed RGBA AVI) still decode. The new lossless format is about 400× smaller for small files: the 5 KB README took 8.4 MB as a 1.0 video and takes 20 KB now.
 
-### Non-Functional Requirements
+## Development
 
-#### Performance
-- Encode: <2s per file (small files)
-- Decode: <1s per file (small files)
-- Search: <50ms latency
+```bash
+pip install pytest
+python -m pytest tests
+```
 
-#### Data Integrity
-- Lossless encoding/decoding verified via CRC32
-- SHA256 hash tracking for verification
-
-#### Compatibility
-- Output: AVI container with RGBA codec
-- Tested on Windows
-
-### Architecture
+The tests cover round trips in every mode and container, filename storage, FOLD 1.0 compatibility, rejection of non-FOLD videos, and (when `ffmpeg` is installed) decoding after a lossy re-encode.
 
 ```
 fold/
-├── core/           # Encoder/Decoder
-│   ├── encoder.py  # Data → Video
-│   ├── decoder.py  # Video → Data
-│   └── fractal.py  # Fractal encoding logic
-├── ai/             # AI Memory System
-│   ├── metadata.py # Metadata extraction/injection
-│   ├── indexer.py  # Search index
-│   └── search.py   # Search engine
-├── sdk/            # Python SDK
-│   └── python/
-│       └── fold_sdk.py
-├── api/            # REST API
-│   └── server.py
-└── cli/            # Command-line
-    └── main.py
+├── core/
+│   ├── container.py  # headers, length and checksum
+│   ├── frames.py     # bytes <-> frames for each mode, format detection
+│   ├── encoder.py    # store()
+│   └── decoder.py    # retrieve(), retrieve_file()
+├── api/server.py     # FastAPI server + web app hosting
+├── cli/main.py       # `fold` command
+└── utils/
+web-app/              # browser encoder/decoder
+tests/
 ```
 
 ## License
